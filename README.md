@@ -1,1 +1,3 @@
 # ImageGenerationFromScratch
+
+GAN model
