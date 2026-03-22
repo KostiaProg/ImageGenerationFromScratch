@@ -8,73 +8,91 @@ from torchvision import transforms, datasets
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-# Plot the loss curves and generate an image
+# make it with convolutional layers for RGB generation
 
-WIDTH = 320
-HEIGHT = 240
+WIDTH = 128
+HEIGHT = 64
 BATCH_SIZE = 32
-PIXELS = WIDTH*HEIGHT # 1600x1200 - 320x240
+PIXELS = WIDTH*HEIGHT # 1600x1200 - 128x64
 
 MODELS_PATH = Path("models")
 DISCRIMINATOR_PATH = MODELS_PATH / "image_discriminator.1.0.pth"
 GENERATOR_PATH = MODELS_PATH / "image_generator.1.0.pth"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-SIZE = 256
+COLOR_CHANNELS = 3
+FEATURE_MULTIPLIER = 64
+HIDDEN_DIM = 100
+
 SAMPLES = 16
-NOISE = Variable(torch.randn(SIZE, 100))(SAMPLES)
+NOISE = Variable(torch.randn(BATCH_SIZE, HIDDEN_DIM, 2, 1))(SAMPLES)
 
 # models
 class Discriminator(nn.Module):
-    def __init__(self, in_features: int=PIXELS, out_features: int=1):
+    def __init__(self, feature_multiplier=FEATURE_MULTIPLIER, color_channels=COLOR_CHANNELS):
         super().__init__()
 
         self.hidden1 = nn.Sequential(
-            nn.Linear(in_features, 1024),
-            nn.GELU(),
-            nn.Dropout(0.3)
+            nn.Conv2d(color_channels, feature_multiplier, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(feature_multiplier),
+            nn.LeakyReLU(0.2, True),
         )
         self.hidden2 = nn.Sequential(
-            nn.Linear(1024, 512),
-            nn.GELU(),
-            nn.Dropout(0.3)
+            nn.Conv2d(feature_multiplier, feature_multiplier*2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(feature_multiplier*2),
+            nn.LeakyReLU(0.2, True),
         )
         self.hidden3 = nn.Sequential(
-            nn.Linear(512, 256),
-            nn.GELU(),
-            nn.Dropout(0.3)
+            nn.Conv2d(feature_multiplier*2, feature_multiplier*4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(feature_multiplier*4),
+            nn.LeakyReLU(0.2, True),
         )
-        self.out = nn.Sequential(
-            nn.Linear(256, out_features),
-            nn.Sigmoid()
+        self.hidden4 = nn.Sequential(
+            nn.Conv2d(feature_multiplier*4, feature_multiplier*8, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(feature_multiplier*8),
+            nn.LeakyReLU(0.2, True),
         )
+        self.hidden5 = nn.Sequential(
+            nn.Conv2d(feature_multiplier*8, feature_multiplier*16, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(feature_multiplier*8),
+            nn.LeakyReLU(0.2, True),
+        )
+        self.out = nn.Conv2d(feature_multiplier*16, 1, (4, 2), 1, 0, bias=False),
 
     def forward(self, x):
-        return self.out(self.hidden3(self.hidden2(self.hidden1(x))))
+        return self.out(self.hidden4(self.hidden3(self.hidden2(self.hidden1(x)))))
     
 class Generator(nn.Module):
-    def __init__(self, in_features: int=PIXELS, out_features: int=PIXELS):
+    def __init__(self, hiddem_dim=HIDDEN_DIM, feature_multiplier=FEATURE_MULTIPLIER, color_channels=COLOR_CHANNELS):
         super().__init__()
 
         self.hidden1 = nn.Sequential(
-            nn.Linear(in_features, 256),
-            nn.GELU()
+            nn.ConvTranspose2d(hiddem_dim, feature_multiplier*8, kernel_size=4, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(feature_multiplier*8),
+            nn.LeakyReLU(0.2, True),
         )
         self.hidden2 = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.GELU()
+            nn.ConvTranspose2d(feature_multiplier*8, feature_multiplier*4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(feature_multiplier*4),
+            nn.LeakyReLU(0.2, True),
         )
         self.hidden3 = nn.Sequential(
-            nn.Linear(512, 1024),
-            nn.GELU()
+            nn.ConvTranspose2d(feature_multiplier*4, feature_multiplier*2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(feature_multiplier*2),
+            nn.LeakyReLU(0.2, True),
+        )
+        self.hidden4 = nn.Sequential(
+            nn.ConvTranspose2d(feature_multiplier*2, feature_multiplier, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(feature_multiplier),
+            nn.LeakyReLU(0.2, True),
         )
         self.out = nn.Sequential(
-            nn.Linear(1024, out_features),
+            nn.ConvTranspose2d(feature_multiplier,  color_channels, 4, 2, 1, bias=False),
             nn.Tanh()
         )
 
     def forward(self, x):
-        return self.out(self.hidden3(self.hidden2(self.hidden1(x))))
+        return self.out(self.hidden4(self.hidden3(self.hidden2(self.hidden1(x)))))
     
 
 # training fns
@@ -105,13 +123,16 @@ def train_generator(discriminator, optimizer, loss_fn, fake_data, n):
     return loss
 
 def train(epochs, dataloader, discriminator, generator, d_optim, g_optim, loss_fn, noise):
-    results = {"d_loss": [],
+    results = { # for plotting
+        "d_loss": [],
         "g_loss": [],
     }
 
+    # trianing
     for epoch in range(epochs):
         for n_batch, (real_batch,_) in enumerate(dataloader):
             n = real_batch.size(0)
+            real_batch = real_batch.to(device)
 
             # discriminator
             real_data = Variable(real_batch.view(real_batch.size(0), PIXELS)) # images to vectors
@@ -128,6 +149,14 @@ def train(epochs, dataloader, discriminator, generator, d_optim, g_optim, loss_f
             results["g_loss"].append(g_loss.item() if isinstance(g_loss, torch.Tensor) else g_loss)
 
     # plot curves
+    plt.plot(epochs, d_loss, label="d_loss")
+    plt.plot(epochs, g_loss, label="g_loss")
+    plt.title("Loss")
+    plt.xlabel("Epochs")
+    plt.legend()
+    plt.show()
+
+    # save model
     save_models(discriminator, generator, DISCRIMINATOR_PATH, GENERATOR_PATH)
 
 
@@ -156,8 +185,8 @@ def create_model():
     dataloader = load_data()
 
     # models
-    discriminator = Discriminator()
-    generator = Generator()
+    discriminator = Discriminator().to(device)
+    generator = Generator().to(device)
 
     # optim and loss
     d_optim = optim.Adam()
@@ -183,6 +212,11 @@ def get_saved_model() -> nn.Module:
 
 def generate_image():
     generator = get_saved_model()
-    image = Variable(NOISE(1)).detach()
+    image = generator(Variable(NOISE(1)).detach())
 
-    print(image.shape)
+    plt.imshow(image)
+    plt.title("Generated image")
+    plt.axis("off")
+    plt.show()
+
+# generate_image()
