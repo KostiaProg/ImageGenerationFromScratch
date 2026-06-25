@@ -129,6 +129,11 @@ def train_discriminator(discriminator, optimizer, loss_fn, real_data, label_smoo
     pred_fake = discriminator(fake_data).view(-1)
     loss_fake = loss_fn(pred_fake, torch.zeros_like(pred_fake))
 
+    # accuracy monitoring
+    d_real_acc = (torch.sigmoid(pred_real) > 0.5).float().mean().item()
+    d_fake_acc = (torch.sigmoid(pred_fake) < 0.5).float().mean().item()
+    print(f"  D_real_acc: {d_real_acc:.3f} | D_fake_acc: {d_fake_acc:.3f} | D_loss: {d_loss:.4f}")
+
     optimizer.zero_grad()
     (loss_real + loss_fake).backward()
     optimizer.step()
@@ -170,16 +175,6 @@ def train(epochs, dataloader, discriminator, generator, d_optim, g_optim, loss_f
                 fake_data = generator(noise_d).detach() # detach, so gradients are not calculated for generator
                 d_loss = train_discriminator(discriminator, d_optim, loss_fn, real_data, LABEL_SMOOTHING, fake_data, batch_size)
                 epoch_d_loss += d_loss
-
-                # accuracy monitoring
-                with torch.no_grad():
-                    pred_real = discriminator(real_data).view(-1)
-                    pred_fake = discriminator(fake_data).view(-1)
-
-                    d_real_acc = (torch.sigmoid(pred_real) > 0.5).float().mean().item()
-                    d_fake_acc = (torch.sigmoid(pred_fake) < 0.5).float().mean().item()
-
-                    print(f"  D_real_acc: {d_real_acc:.3f} | D_fake_acc: {d_fake_acc:.3f} | D_loss: {d_loss:.4f}")
 
             # generator
             noise_g = torch.randn(batch_size, HIDDEN_DIM, 1, 1, device=device)
@@ -237,7 +232,7 @@ def create_model():
 
     loss_fn = nn.BCEWithLogitsLoss()
 
-    epochs = 50
+    epochs = 80
     n_critic = 2
     train(epochs=epochs, dataloader=dataloader, discriminator=discriminator, generator=generator, d_optim=d_optim, g_optim=g_optim, loss_fn=loss_fn, n_critic=n_critic)
 
